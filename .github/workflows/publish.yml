@@ -4,7 +4,13 @@ on:
   push:
     tags:
       - 'v*'     # läuft nur bei Tags wie v1.0.0
-
+      
+workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Validate only (no publish)'
+        required: false
+        default: 'false'
 jobs:
   build:
     runs-on: windows-latest
