@@ -12,11 +12,7 @@
 .EXTERNALMODULEDEPENDENCIES
 .REQUIREDSCRIPTS
 .EXTERNALSCRIPTDEPENDENCIES
-.DESCRIPTION
-    Update-FSLogix checks, downloads, and updates Microsoft FSLogix to the latest available release.
-    It can perform a silent in-place upgrade if a newer build is available, or just compare versions
-    without installing anything. Created by ChatGPT on behalf of Jörg Brors.
-    All output is in English.
+.DESCRIPTION Update-FSLogix checks, downloads, and updates Microsoft FSLogix to the latest available release.  
 .RELEASENOTES
     0.0.1 – Initial release, created by ChatGPT on behalf of Jörg Brors.
 #>
