@@ -17,8 +17,16 @@ jobs:
       - name: Install PowerShellGet & NuGet
         shell: pwsh
         run: |
+          # Erst sicherstellen, dass PackageManagement geladen ist
+          Install-Module -Name PackageManagement -Force -Scope CurrentUser -AllowClobber
+          Import-Module PackageManagement
+
+          # Danach NuGet Provider installieren
+          Get-PackageProvider -Name NuGet -ForceBootstrap -Force
+
+          # PowerShellGet updaten
           Install-Module -Name PowerShellGet -Force -Scope CurrentUser -AllowClobber
-          Install-PackageProvider -Name NuGet -Force
+          Import-Module PowerShellGet
 
       - name: Validate Script Metadata
         shell: pwsh
