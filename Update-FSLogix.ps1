@@ -6,17 +6,12 @@
 .COMPANYNAME 
 .COPYRIGHT (c) 2025 Jörg Brors. All rights reserved.
 .TAGS FSLogix Update GoldenImage ZipCompare OnlineCompare
-.LICENSEURI https://opensource.org/licenses/MIT
 .LICENS MIT
 .PROJECTURI https://github.com/joergbrors/Update-FSLogix
 .ICONURI
 .EXTERNALMODULEDEPENDENCIES
 .REQUIREDSCRIPTS
 .EXTERNALSCRIPTDEPENDENCIES
-.DESCRIPTION
-    Checks, downloads, and updates Microsoft FSLogix. 
-    Supports version check, Release Notes parsing, aka.ms resolution, 
-    and advanced ZipCompare (extracts installer and reads version).
 .RELEASENOTES
     0.0.1 – Initial release, created by ChatGPT on behalf of Jörg Brors.
 #>
