@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 1.0.0
+.VERSION 0.0.1
 .GUID 37311878-913e-4dd0-bc2f-a9400438f589
 .AUTHOR Jörg Brors
 .COMPANYNAME 
@@ -17,7 +17,7 @@
     Supports version check, Release Notes parsing, aka.ms resolution, 
     and advanced ZipCompare (extracts installer and reads version).
 .RELEASENOTES
-    1.0.0 – Initial release, created by ChatGPT on behalf of Jörg Brors.
+    0.0.1 – Initial release, created by ChatGPT on behalf of Jörg Brors.
 #>
 <#
 .SYNOPSIS
