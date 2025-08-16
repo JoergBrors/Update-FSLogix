@@ -1,19 +1,23 @@
 <#PSScriptInfo
 
 .VERSION 1.0.0
-.GUID 5a2f8a63-6a17-4a13-9d12-1b5a23456789
+.GUID 37311878-913e-4dd0-bc2f-a9400438f589
 .AUTHOR Jörg Brors
 .COMPANYNAME 
 .COPYRIGHT (c) 2025 Jörg Brors. All rights reserved.
-.TAGS FSLogix Update Management
+.TAGS FSLogix Update GoldenImage ZipCompare OnlineCompare
 .LICENSEURI https://opensource.org/licenses/MIT
 .PROJECTURI https://github.com/joergbrors/Update-FSLogix
 .ICONURI
 .EXTERNALMODULEDEPENDENCIES
 .REQUIREDSCRIPTS
 .EXTERNALSCRIPTDEPENDENCIES
+.DESCRIPTION
+    Checks, downloads, and updates Microsoft FSLogix. 
+    Supports version check, Release Notes parsing, aka.ms resolution, 
+    and advanced ZipCompare (extracts installer and reads version).
 .RELEASENOTES
-    First release: script to check, download and update FSLogix with ZipCompare and OnlineCompare options.
+    1.0.0 – Initial release, created by ChatGPT on behalf of Jörg Brors.
 #>
 <#
 .SYNOPSIS
