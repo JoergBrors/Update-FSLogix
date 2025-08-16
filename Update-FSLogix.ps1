@@ -7,6 +7,7 @@
 .COPYRIGHT (c) 2025 Jörg Brors. All rights reserved.
 .TAGS FSLogix Update GoldenImage ZipCompare OnlineCompare
 .LICENSEURI https://opensource.org/licenses/MIT
+.LICENS MIT
 .PROJECTURI https://github.com/joergbrors/Update-FSLogix
 .ICONURI
 .EXTERNALMODULEDEPENDENCIES
