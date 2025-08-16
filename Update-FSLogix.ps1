@@ -17,44 +17,44 @@
 #>
 <#
 .SYNOPSIS
-Checks, downloads, and updates Microsoft FSLogix to the latest available release.
+    Checks, downloads, and updates Microsoft FSLogix to the latest available release.
 
 .DESCRIPTION
-Update-FSLogix checks the installed FSLogix version on the host and, if requested, downloads
-the current package via the official aka.ms redirect, extracts the ZIP, reads the
-FSLogixAppsSetup.exe FileVersion, compares it to the installed build, and performs a
-silent in-place upgrade when newer. Created by ChatGPT on behalf of Jörg Brors.
-All output is in English.
+    Update-FSLogix checks the installed FSLogix version on the host and, if requested, downloads
+    the current package via the official aka.ms redirect, extracts the ZIP, reads the
+    FSLogixAppsSetup.exe FileVersion, compares it to the installed build, and performs a
+    silent in-place upgrade when newer. Created by ChatGPT on behalf of Jörg Brors.
+    All output is in English.
 
 .PARAMETER Update
-Perform the in-place silent upgrade if a newer build is available.
+    Perform the in-place silent upgrade if a newer build is available.
 
 .PARAMETER ZipCompare
-Download the latest ZIP, extract it, read the EXE FileVersion, and compare only (no install).
+    Download the latest ZIP, extract it, read the EXE FileVersion, and compare only (no install).
 
 .PARAMETER ResolveOnly
-Resolve the final download URL behind https://aka.ms/fslogix_download and show it.
+    Resolve the final download URL behind https://aka.ms/fslogix_download and show it.
 
 .PARAMETER NoProxy
-Disable system proxy usage for HTTP requests (useful for strict corporate proxies).
+    Disable system proxy usage for HTTP requests (useful for strict corporate proxies).
 
 .PARAMETER KeepTemp
-Keep the downloaded ZIP and extracted temp folder for troubleshooting.
+    Keep the downloaded ZIP and extracted temp folder for troubleshooting.
 
 .EXAMPLE
-.\Update-FSLogix.ps1
-Performs a check only (no changes).
+    Update-FSLogix.ps1
+    Performs a check only (no changes).
 
 .EXAMPLE
-.\Update-FSLogix.ps1 -ZipCompare
-Downloads current package, extracts, and compares version with installed build.
+    Update-FSLogix.ps1 -ZipCompare
+    Downloads current package, extracts, and compares version with installed build.
 
 .EXAMPLE
-.\Update-FSLogix.ps1 -Update
-Performs a silent in-place upgrade if the downloaded build is newer.
+    Update-FSLogix.ps1 -Update
+    Performs a silent in-place upgrade if the downloaded build is newer.
 
 .NOTES
-Run in an elevated PowerShell session (Administrator). Works with Windows PowerShell 5.1 and newer.
+    Run in an elevated PowerShell session (Administrator). Works with Windows PowerShell 5.1 and newer.
 #>
 
 [CmdletBinding(SupportsShouldProcess=$true)]
