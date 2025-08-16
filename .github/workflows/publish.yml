@@ -3,17 +3,13 @@ name: Publish PowerShell Script
 on:
   push:
     tags:
-      - 'v*'     # läuft nur bei Tags wie v1.0.0
-      
-workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Validate only (no publish)'
-        required: false
-        default: 'false'
+      - 'v*'   # läuft nur bei Tags wie v1.0.0
+  workflow_dispatch:   # manuell starten möglich
+
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -27,7 +23,7 @@ jobs:
       - name: Validate Script Metadata
         shell: pwsh
         run: |
-          Test-ScriptFileInfo -Path ./src/Update-FSLogix.ps1
+          Test-ScriptFileInfo -Path ./Update-FSLogix.ps1
 
       - name: Publish to PowerShell Gallery
         if: github.ref_type == 'tag'
@@ -35,4 +31,4 @@ jobs:
         env:
           NUGET_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          Publish-Script -Path ./src/Update-FSLogix.ps1 -NuGetApiKey $env:NUGET_KEY -Verbose
+          Publish-Script -Path ./Update-FSLogix.ps1 -NuGetApiKey $env:NUGET_KEY -Verbose
