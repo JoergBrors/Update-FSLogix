@@ -1,0 +1,32 @@
+name: Publish PowerShell Script
+
+on:
+  push:
+    tags:
+      - 'v*'     # läuft nur bei Tags wie v1.0.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install PowerShellGet & NuGet
+        shell: pwsh
+        run: |
+          Install-Module -Name PowerShellGet -Force -Scope CurrentUser -AllowClobber
+          Install-PackageProvider -Name NuGet -Force
+
+      - name: Validate Script Metadata
+        shell: pwsh
+        run: |
+          Test-ScriptFileInfo -Path ./src/Update-FSLogix.ps1
+
+      - name: Publish to PowerShell Gallery
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          NUGET_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          Publish-Script -Path ./src/Update-FSLogix.ps1 -NuGetApiKey $env:NUGET_KEY -Verbose
