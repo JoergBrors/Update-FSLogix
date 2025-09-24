@@ -1,64 +1,59 @@
 <#PSScriptInfo
 
-.VERSION 0.0.1
+.VERSION 0.1.1
 .GUID 37311878-913e-4dd0-bc2f-a9400438f589
 .AUTHOR Jörg Brors
-.COMPANYNAME 
+.COMPANYNAME
 .COPYRIGHT (c) 2025 Jörg Brors. All rights reserved.
 .TAGS FSLogix Update GoldenImage ZipCompare OnlineCompare
 .LICENSEURI https://opensource.org/licenses/MIT
 .PROJECTURI https://github.com/joergbrors/Update-FSLogix
-.ICONURI
-.EXTERNALMODULEDEPENDENCIES
-.REQUIREDSCRIPTS
-.EXTERNALSCRIPTDEPENDENCIES
-.DESCRIPTION Update-FSLogix checks, downloads, and updates Microsoft FSLogix to the latest available release.  
+.DESCRIPTION Update-FSLogix checks, downloads, and updates Microsoft FSLogix to the latest available release (PowerShell 5.1 compatible).
 .RELEASENOTES
-    0.0.1 – Initial release, created by ChatGPT on behalf of Jörg Brors.
+    0.1.1 – PS 5.1 hardening: remove null-coalescing, avoid ProxyUseDefaultCredentials, implement NoProxy via DefaultWebProxy, keep only 5.1-safe params.
+    0.1.0 – Add -Update path, support -InstallerPath (ZIP/EXE), robust version compare, TLS 1.2, admin check, summary.
+    0.0.1 – Initial release.
 #>
 <#
 .SYNOPSIS
     Checks, downloads, and updates Microsoft FSLogix to the latest available release.
 
-.DESCRIPTION
-    Update-FSLogix checks the installed FSLogix version on the host and, if requested, downloads
-    the current package via the official aka.ms redirect, extracts the ZIP, reads the
-    FSLogixAppsSetup.exe FileVersion, compares it to the installed build, and performs a
-    silent in-place upgrade when newer. Created by ChatGPT on behalf of Jörg Brors.
-    All output is in English.
+.PARAMETER AcceptEula
+    Required for -Update.
 
 .PARAMETER Update
-    Perform the in-place silent upgrade if a newer build is available.
-
-.PARAMETER ZipCompare
-    Download the latest ZIP, extract it, read the EXE FileVersion, and compare only (no install).
+    Perform silent in-place upgrade if newer.
 
 .PARAMETER ResolveOnly
-    Resolve the final download URL behind https://aka.ms/fslogix_download and show it.
+    Resolve final aka.ms target URL and print it.
+
+.PARAMETER OnlineCompare
+    Show best-effort version hint from URL.
+
+.PARAMETER ZipCompare
+    Compare package FileVersion vs installed (no install).
+
+.PARAMETER InstallerPath
+    Local ZIP or EXE to use instead of downloading.
+
+.PARAMETER DownloadUrl
+    Defaults to https://aka.ms/fslogix_download.
+
+.PARAMETER UseBits
+    Use BITS for download.
 
 .PARAMETER NoProxy
-    Disable system proxy usage for HTTP requests (useful for strict corporate proxies).
+    Bypass system proxy for this process (via .NET DefaultWebProxy).
 
 .PARAMETER KeepTemp
-    Keep the downloaded ZIP and extracted temp folder for troubleshooting.
+    Keep temp files.
 
-.EXAMPLE
-    Update-FSLogix.ps1
-    Performs a check only (no changes).
-
-.EXAMPLE
-    Update-FSLogix.ps1 -ZipCompare
-    Downloads current package, extracts, and compares version with installed build.
-
-.EXAMPLE
-    Update-FSLogix.ps1 -Update
-    Performs a silent in-place upgrade if the downloaded build is newer.
-
-.NOTES
-    Run in an elevated PowerShell session (Administrator). Works with Windows PowerShell 5.1 and newer.
+.PARAMETER LogPath
+    Log directory (default C:\ProgramData\FSLogix\Update).
 #>
 
-[CmdletBinding(SupportsShouldProcess=$true)]
+#Requires -Version 5.1
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
     [switch]$AcceptEula,
     [switch]$Update,
@@ -73,130 +68,351 @@ param(
     [string]$LogPath = "C:\ProgramData\FSLogix\Update"
 )
 
-# --- Logging helper ---
-function Write-Log {
-    param([string]$Message, [string]$Level="INFO")
-    $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
-    Write-Output $line
-    if ($global:LogFile) { Add-Content -Path $global:LogFile -Value $line }
+# --- Pre-flight: TLS & Admin ---
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+} catch { }
+
+function Test-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($id)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+if (-not (Test-Admin)) {
+    Write-Warning "Please run elevated (Administrator). Some actions will fail otherwise."
 }
 
-# --- Prepare logging ---
-if (-not (Test-Path $LogPath)) { New-Item -Path $LogPath -ItemType Directory -Force | Out-Null }
-$global:LogFile = Join-Path $LogPath ("fslogix_update_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
-Write-Log "Log file: $global:LogFile"
+# Handle NoProxy for the whole process (PS 5.1-safe)
+$originalProxy = [System.Net.WebRequest]::DefaultWebProxy
+if ($NoProxy) {
+    try {
+        [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy  # direct
+    } catch { }
+    # also clear env proxies for child operations
+    $env:http_proxy  = $null
+    $env:https_proxy = $null
+    $env:HTTP_PROXY  = $null
+    $env:HTTPS_PROXY = $null
+}
 
-# --- Get installed FSLogix version ---
+# --- Logging ---
+function Write-Log {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet("INFO","WARN","ERROR","DEBUG")]
+        [string]$Level = "INFO"
+    )
+    $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
+    Write-Output $line
+    if ($script:LogFile) { Add-Content -Path $script:LogFile -Value $line }
+}
+if (-not (Test-Path $LogPath)) { New-Item -Path $LogPath -ItemType Directory -Force | Out-Null }
+$script:LogFile = Join-Path $LogPath ("fslogix_update_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+Write-Log "Log file: $script:LogFile"
+
+# --- Helpers ---
 function Get-FSLogixInstalledVersion {
     $reg = "HKLM:\SOFTWARE\FSLogix\Apps"
     $result = [ordered]@{
-        Installed = $false; Running = $false; FileVersion = $null; RegistryVersion = $null
+        Installed       = $false
+        Running         = $false
+        FileVersion     = $null
+        RegistryVersion = $null
+        ExePath         = "C:\Program Files\FSLogix\Apps\frx.exe"
     }
 
     if (Test-Path $reg) {
-        $val = Get-ItemProperty -Path $reg -ErrorAction SilentlyContinue
-        $result.RegistryVersion = $val.Version
-        $exe = "C:\Program Files\FSLogix\Apps\frx.exe"
-        if (Test-Path $exe) {
-            $fv = (Get-Item $exe).VersionInfo.FileVersion
+        try {
+            $val = Get-ItemProperty -Path $reg -ErrorAction Stop
+            $result.RegistryVersion = $val.Version
+        } catch {
+            Write-Log "Registry read failed: $_" "WARN"
+        }
+    }
+
+    if (Test-Path $result.ExePath) {
+        try {
+            $fv = (Get-Item $result.ExePath).VersionInfo.FileVersion
             $result.FileVersion = $fv
             $result.Installed = $true
+        } catch {
+            Write-Log "Failed to read frx.exe FileVersion: $_" "WARN"
         }
+    }
+
+    try {
         $svc = Get-Service -Name "frxsvc" -ErrorAction SilentlyContinue
         if ($svc -and $svc.Status -eq "Running") { $result.Running = $true }
-    }
+    } catch { }
+
     [pscustomobject]$result
 }
 
-$installed = Get-FSLogixInstalledVersion
-Write-Log "Installed before: Installed=$($installed.Installed), Running=$($installed.Running), FileVersion=$($installed.FileVersion), RegistryVersion=$($installed.RegistryVersion)"
-
-# --- Resolve aka.ms link ---
 function Resolve-FslogixUrl {
-    param([string]$Url)
+    param([Parameter(Mandatory)][string]$Url)
+    # Use HttpWebRequest to catch Location header without auto-redirect (PS 5.1-safe)
     try {
-        $req = [System.Net.WebRequest]::Create($Url)
+        $req = [System.Net.HttpWebRequest]::Create($Url)
         $req.AllowAutoRedirect = $false
+        $req.Method = "HEAD"
         $resp = $req.GetResponse()
-        $final = $resp.GetResponseHeader("Location")
-        $resp.Close()
-        return $final
+        try {
+            $loc = $resp.Headers["Location"]
+            if ([string]::IsNullOrWhiteSpace($loc)) { return $Url } else { return $loc }
+        } finally { $resp.Close() }
     } catch {
-        Write-Log "Failed to resolve URL: $_" "ERROR"
+        # If it threw due to 3xx, try to read Location from the response
+        try {
+            $resp = $_.Exception.Response
+            if ($resp -and $resp.Headers) {
+                $loc = $resp.Headers["Location"]
+                if ($loc) { return $loc }
+            }
+        } catch { }
+        Write-Log "Failed to resolve URL ($Url): $($_.Exception.Message)" "ERROR"
         return $null
     }
 }
 
-# --- Download helper ---
 function Download-File {
-    param([string]$Url, [string]$Destination)
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    if (Test-Path $Destination) { Remove-Item -Path $Destination -Force -ErrorAction SilentlyContinue }
+
     if ($UseBits) {
         Write-Log "Using BITS transfer..."
         Start-BitsTransfer -Source $Url -Destination $Destination -DisplayName "FSLogix Download"
+        return
+    }
+
+    try {
+        Write-Log "Using Invoke-WebRequest for download..."
+        Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Log "Download failed: $($_.Exception.Message)" "ERROR"
+        throw
+    }
+}
+
+function Expand-Zip {
+    param(
+        [Parameter(Mandatory)][string]$ZipPath,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    if (-not (Test-Path $Destination)) { New-Item -Path $Destination -ItemType Directory -Force | Out-Null }
+    Expand-Archive -Path $ZipPath -DestinationPath $Destination -Force
+}
+
+function Try-ParseVersion {
+    param([string]$s)
+    try {
+        $parts = ($s -split '[^\d]+' | Where-Object { $_ -ne '' })
+        if ($parts.Count -ge 3) {
+            $padded = @($parts[0], $parts[1], $parts[2], ($(if ($parts.Count -ge 4) { $parts[3] } else { '0' })))
+            $norm = ($padded[0..3]) -join '.'
+            return [version]$norm
+        }
+    } catch { }
+    return $null
+}
+
+function Get-FileVersionVersionObj {
+    param([string]$FilePath)
+    $fv = (Get-Item $FilePath).VersionInfo.FileVersion
+    $vObj = Try-ParseVersion -s $fv
+    [pscustomobject]@{ Raw = $fv; Version = $vObj }
+}
+
+function Find-SetupInFolder { param([string]$Root)
+    $setup = Get-ChildItem -Path $Root -Recurse -Filter "FSLogixAppsSetup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($setup) { return $setup.FullName } else { return $null }
+}
+
+function Stop-Start-FrxSvc { param([switch]$StopOnly)
+    $svc = Get-Service -Name "frxsvc" -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {
+        Write-Log "Stopping service frxsvc..."
+        Stop-Service -Name frxsvc -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+    if (-not $StopOnly) {
+        Write-Log "Starting service frxsvc..."
+        Start-Service -Name frxsvc -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-FSLogix {
+    param(
+        [Parameter(Mandatory)][string]$SetupExe,
+        [Parameter(Mandatory)][string]$LogDir
+    )
+    if (-not (Test-Path $LogDir)) { New-Item -Path $LogDir -ItemType Directory -Force | Out-Null }
+    $setupLog = Join-Path $LogDir ("FSLogixSetup_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+    # Assumption: silent flags supported by FSLogix EXE
+    $args = '/install /quiet /norestart /log "{0}"' -f $setupLog
+
+    Write-Log "Running: `"$SetupExe`" $args"
+    if ($PSCmdlet.ShouldProcess($SetupExe, "Install FSLogix")) {
+        Stop-Start-FrxSvc -StopOnly
+        $p = Start-Process -FilePath $SetupExe -ArgumentList $args -Wait -PassThru
+        Write-Log "Installer exit code: $($p.ExitCode)"
+        Start-Sleep -Seconds 2
+        Stop-Start-FrxSvc
+        return $p.ExitCode
+    }
+    return 0
+}
+
+# --- State ---
+$installed = Get-FSLogixInstalledVersion
+Write-Log "Installed: Installed=$($installed.Installed), Running=$($installed.Running), FileVersion=$($installed.FileVersion), RegistryVersion=$($installed.RegistryVersion)"
+
+# --- Work folders ---
+$workRoot = Join-Path ([IO.Path]::GetTempPath()) ("fslogix_{0}" -f ([guid]::NewGuid().ToString('N')))
+$newPaths = [ordered]@{
+    Root         = $workRoot
+    Zip          = Join-Path $workRoot "fslogix.zip"
+    Extract      = Join-Path $workRoot "extract"
+    SetupExe     = $null
+    Source       = $null   # 'URL' | 'InstallerPathZIP' | 'InstallerPathEXE'
+    ResolvedUrl  = $null
+}
+New-Item -Path $workRoot -ItemType Directory -Force | Out-Null
+
+# Ensure cleanup of proxy on exit
+$cleanupProxyScriptBlock = {
+    param($originalProxyRef, $noProxyFlag)
+    if ($noProxyFlag) {
+        try { [System.Net.WebRequest]::DefaultWebProxy = $originalProxyRef } catch { }
+    }
+}
+
+try {
+    if ($InstallerPath) {
+        if (-not (Test-Path $InstallerPath)) { throw "InstallerPath not found: $InstallerPath" }
+        $ext = [IO.Path]::GetExtension($InstallerPath).ToLowerInvariant()
+        if ($ext -eq ".zip") {
+            Write-Log "Using local ZIP: $InstallerPath"
+            $newPaths.Source = 'InstallerPathZIP'
+            Expand-Zip -ZipPath $InstallerPath -Destination $newPaths.Extract
+            $setupExe = Find-SetupInFolder -Root $newPaths.Extract
+            if (-not $setupExe) { throw "FSLogixAppsSetup.exe not found in ZIP." }
+            $newPaths.SetupExe = $setupExe
+        }
+        elseif ($ext -eq ".exe") {
+            Write-Log "Using local EXE: $InstallerPath"
+            $newPaths.Source = 'InstallerPathEXE'
+            $newPaths.SetupExe = $InstallerPath
+        }
+        else { throw "Unsupported file extension for InstallerPath: $ext" }
     }
     else {
-        try {
-            Write-Log "Using WebClient for download..."
-            $wc = New-Object System.Net.WebClient
-            if ($NoProxy) { $wc.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy() }
-            $wc.DownloadFile($Url, $Destination)
-        }
-        catch {
-            Write-Log "WebClient failed, trying Invoke-WebRequest..." "WARN"
-            Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
-        }
+        $resolved = Resolve-FslogixUrl -Url $DownloadUrl
+        if (-not $resolved) { throw "Could not resolve download URL." }
+        $newPaths.ResolvedUrl = $resolved
+        Write-Log "Resolved final download URL: $resolved"
+
+        Write-Log "Downloading package to $($newPaths.Zip)"
+        Download-File -Url $resolved -Destination $newPaths.Zip
+        Unblock-File -Path $newPaths.Zip -ErrorAction SilentlyContinue
+
+        Expand-Zip -ZipPath $newPaths.Zip -Destination $newPaths.Extract
+        $setupExe = Find-SetupInFolder -Root $newPaths.Extract
+        if (-not $setupExe) { throw "FSLogixAppsSetup.exe not found after extraction." }
+        $newPaths.SetupExe = $setupExe
+        $newPaths.Source = 'URL'
     }
-}
 
-# --- Compare version inside ZIP ---
-function Compare-ZipVersion {
-    param([string]$Url)
+    # --- Version from package ---
+    $pkgVersionInfo = Get-FileVersionVersionObj -FilePath $newPaths.SetupExe
+    Write-Log "Package FSLogixAppsSetup.exe FileVersion (raw): $($pkgVersionInfo.Raw)"
+    if (-not $pkgVersionInfo.Version) { Write-Log "Could not parse package version for robust comparison." "WARN" }
 
-    $temp = New-Item -Path ([IO.Path]::GetTempPath()) -Name ("fslogix_{0}" -f (Get-Random)) -ItemType Directory
-    $zipPath = Join-Path $temp "fslogix.zip"
-    Write-Log "Downloading package to $zipPath"
-    Download-File -Url $Url -Destination $zipPath
+    # --- Installed version ---
+    $installedVersionObj = $null
+    if ($installed.FileVersion) {
+        $installedVersionObj = Try-ParseVersion -s $installed.FileVersion
+        Write-Log "Installed frx.exe FileVersion (raw): $($installed.FileVersion); parsed=$installedVersionObj"
+    } else {
+        Write-Log "FSLogix appears not installed or frx.exe missing." "WARN"
+    }
 
-    $extract = Join-Path $temp "extract"
-    Expand-Archive -Path $zipPath -DestinationPath $extract -Force
-    $setup = Get-ChildItem -Path $extract -Recurse -Filter "FSLogixAppsSetup.exe" | Select-Object -First 1
-    if ($setup) {
-        $filever = (Get-Item $setup.FullName).VersionInfo.FileVersion
-        Write-Log "Extracted FSLogixAppsSetup.exe version: $filever"
-        if ($installed.FileVersion -ne $null) {
-            if ([version]$installed.FileVersion -lt [version]$filever) {
-                Write-Log "Installed version $($installed.FileVersion) is older than package version $filever" "WARN"
+    # --- Decide upgrade ---
+    $isUpgradeAvailable = $false
+    if ($pkgVersionInfo.Version -and $installedVersionObj) {
+        $isUpgradeAvailable = ($installedVersionObj -lt $pkgVersionInfo.Version)
+        Write-Log ("Comparison: Installed={0}  Package={1}  UpgradeAvailable={2}" -f $installedVersionObj, $pkgVersionInfo.Version, $isUpgradeAvailable)
+    } elseif ($pkgVersionInfo.Version -and -not $installedVersionObj) {
+        $isUpgradeAvailable = $true
+        Write-Log "Treating as upgrade: installed version unknown, package has version." "WARN"
+    }
+
+    # --- Modes ---
+    if ($ResolveOnly) {
+        if ($newPaths.ResolvedUrl) {
+            Write-Log "ResolveOnly: final URL = $($newPaths.ResolvedUrl)"
+        } else {
+            Write-Log "ResolveOnly: using local installer (no URL)."
+        }
+        return
+    }
+
+    if ($OnlineCompare) {
+        if ($newPaths.ResolvedUrl) {
+            $m = [regex]::Match($newPaths.ResolvedUrl, '(?<v>\d{4}\.\d{1,2}|\d{1,2}\.\d{1,2}|\d+\.\d+\.\d+\.\d+)')
+            if ($m.Success) { Write-Log "Info: version hint in URL: $($m.Groups['v'].Value)" }
+            else { Write-Log "No clear version hint in URL." "WARN" }
+        } else {
+            Write-Log "OnlineCompare requested, but using local InstallerPath. Skipping." "WARN"
+        }
+        return
+    }
+
+    if ($ZipCompare -and -not $Update) {
+        Write-Log "ZipCompare: comparison complete. No install performed."
+        return
+    }
+
+    if ($Update) {
+        if (-not $AcceptEula) {
+            Write-Log "You must specify -AcceptEula to proceed with installation." "ERROR"
+            throw "EULA not accepted."
+        }
+        if (-not $isUpgradeAvailable -and $installed.Installed) {
+            Write-Log "Installed version is up-to-date or newer. No installation performed."
+        } else {
+            $exit = Install-FSLogix -SetupExe $newPaths.SetupExe -LogDir $LogPath
+            if ($exit -ne 0) {
+                Write-Log "Installer returned non-zero exit code: $exit" "ERROR"
+                throw "FSLogix installation failed with exit code $exit"
             } else {
-                Write-Log "Installed version $($installed.FileVersion) is up-to-date (>= $filever)"
+                Write-Log "FSLogix installation completed successfully."
             }
         }
+    }
+}
+finally {
+    # restore default proxy if changed
+    & $cleanupProxyScriptBlock $originalProxy $NoProxy | Out-Null
+    if (-not $KeepTemp -and (Test-Path $workRoot)) {
+        try { Remove-Item -Path $workRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
     } else {
-        Write-Log "Setup executable not found in ZIP" "ERROR"
+        Write-Log "Keeping temp folder: $workRoot"
     }
-
-    if (-not $KeepTemp) { Remove-Item -Path $temp -Recurse -Force }
 }
 
-# --- Main flow ---
-$finalUrl = Resolve-FslogixUrl -Url $DownloadUrl
-if ($finalUrl) { Write-Log "Resolved final download URL: $finalUrl" }
-
-if ($ZipCompare) {
-    if ($finalUrl) { Compare-ZipVersion -Url $finalUrl }
-    return
+# --- Summary ---
+$after = Get-FSLogixInstalledVersion
+$result = [pscustomobject]@{
+    LogFile                  = $script:LogFile
+    Source                   = $newPaths.Source
+    ResolvedUrl              = $newPaths.ResolvedUrl
+    PackageSetupExe          = $newPaths.SetupExe
+    Installed_Before         = $installed
+    Installed_After          = $after
+    Package_FileVersion_Raw  = $pkgVersionInfo.Raw
+    Package_FileVersion      = $pkgVersionInfo.Version
 }
-
-if ($OnlineCompare) {
-    if ($finalUrl -match "FSLogix_(?<mver>\d{2}\.\d{2})\.zip") {
-        Write-Log "Info: version in URL (marketing): $($matches['mver'])"
-        Write-Log "No full build in filename to compare against installed build." "WARN"
-    }
-    return
-}
-
-if ($ResolveOnly) {
-    Write-Log "ResolveOnly: final URL = $finalUrl"
-    return
-}
-
-Write-Log "Default: check only. Use -Update or -ZipCompare for actions."
+$result | Format-List
