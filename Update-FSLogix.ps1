@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.1.1
+.VERSION 0.1.2
 .GUID 37311878-913e-4dd0-bc2f-a9400438f589
 .AUTHOR Jörg Brors
 .COMPANYNAME
@@ -10,6 +10,7 @@
 .PROJECTURI https://github.com/joergbrors/Update-FSLogix
 .DESCRIPTION Update-FSLogix checks, downloads, and updates Microsoft FSLogix to the latest available release (PowerShell 5.1 compatible).
 .RELEASENOTES
+    0.1.2 – Default to BITS for downloads with automatic fallback to Invoke-WebRequest; clarify docs; minor robustness fixes.
     0.1.1 – PS 5.1 hardening: remove null-coalescing, avoid ProxyUseDefaultCredentials, implement NoProxy via DefaultWebProxy, keep only 5.1-safe params.
     0.1.0 – Add -Update path, support -InstallerPath (ZIP/EXE), robust version compare, TLS 1.2, admin check, summary.
     0.0.1 – Initial release.
@@ -40,7 +41,7 @@
     Defaults to https://aka.ms/fslogix_download.
 
 .PARAMETER UseBits
-    Use BITS for download.
+    Use BITS for download (default). To force Invoke-WebRequest instead, pass -UseBits:$false.
 
 .PARAMETER NoProxy
     Bypass system proxy for this process (via .NET DefaultWebProxy).
@@ -62,7 +63,7 @@ param(
     [switch]$ZipCompare,
     [string]$InstallerPath = "",
     [string]$DownloadUrl = "https://aka.ms/fslogix_download",
-    [switch]$UseBits,
+    [switch]$UseBits = $true,
     [switch]$NoProxy,
     [switch]$KeepTemp,
     [string]$LogPath = "C:\ProgramData\FSLogix\Update"
@@ -103,7 +104,8 @@ function Write-Log {
         [string]$Level = "INFO"
     )
     $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
-    Write-Output $line
+    # Write to console without polluting the pipeline
+    Write-Host $line
     if ($script:LogFile) { Add-Content -Path $script:LogFile -Value $line }
 }
 if (-not (Test-Path $LogPath)) { New-Item -Path $LogPath -ItemType Directory -Force | Out-Null }
@@ -183,8 +185,12 @@ function Download-File {
 
     if ($UseBits) {
         Write-Log "Using BITS transfer..."
-        Start-BitsTransfer -Source $Url -Destination $Destination -DisplayName "FSLogix Download"
-        return
+        try {
+            Start-BitsTransfer -Source $Url -Destination $Destination -DisplayName "FSLogix Download" -ErrorAction Stop
+            return
+        } catch {
+            Write-Log "BITS transfer failed: $($_.Exception.Message). Falling back to Invoke-WebRequest..." "WARN"
+        }
     }
 
     try {
@@ -383,7 +389,7 @@ try {
         if (-not $isUpgradeAvailable -and $installed.Installed) {
             Write-Log "Installed version is up-to-date or newer. No installation performed."
         } else {
-            $exit = Install-FSLogix -SetupExe $newPaths.SetupExe -LogDir $LogPath
+            $exit = [int](Install-FSLogix -SetupExe $newPaths.SetupExe -LogDir $LogPath)
             if ($exit -ne 0) {
                 Write-Log "Installer returned non-zero exit code: $exit" "ERROR"
                 throw "FSLogix installation failed with exit code $exit"
